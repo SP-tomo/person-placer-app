@@ -1,16 +1,49 @@
-# React + Vite
+# Placer AI - 人数配置調整アプリ
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Placer AI は、特定の空間（部屋や会場など）に人数を配置し、視覚的に調整・シミュレーションするためのツールです。
+ドラッグ＆ドロップによる直感的な操作で、最適なレイアウトをリアルタイムで検討できます。
 
-Currently, two official plugins are available:
+## 🚀 主な機能
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **インタラクティブな配置エリア**: SVG を採用し、マウス操作で人物（ノード）を自由に動かせます。
+- **空間サイズのカスタマイズ**: 幅と高さをメートル単位で設定でき、グリッドに合わせて配置を確認できます。
+- **動的な人数調整**: 配置したい人数を即座に変更可能。初期状態で自動的にグリッド配置されます。
+- **密度・総面積の自動計算**: 空間に対する 1 人あたりの面積（m²/人）をリアルタイムに表示します。
+- **役割（ロール）管理**: 
+  - 役割ごとに色分けして表示。
+  - 役割名やラベルの色をサイドバーから自由に変更可能。
+- **リアルタイム共有**: Firebase Firestore を使用し、複数のブラウザ・端末間で配置状態をリアルタイムに同期します。
 
-## React Compiler
+## 🛠️ 開発技術
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Frontend**: React (Vite), Framer Motion, Lucide React
+- **Styling**: Vanilla CSS (Modern Dark UI / Glassmorphism)
+- **Database**: Firebase Firestore
 
-## Expanding the ESLint configuration
+## 📖 使い方
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### 1. 準備
+プロジェクトのディレクトリで依存関係をインストールし、開発サーバーを起動します。
+
+```powershell
+npm install
+npm run dev
+```
+
+### 2. 基本操作
+- **人数の移動**: 配置エリア内の円をドラッグすることで移動できます。
+- **設定変更**: 左側のサイドバーで空間サイズや人数を変更すると、即座に画面に反映されます。
+- **役割の編集**: サイドバーの「Roles & Colors」セクションで、役割名のテキスト入力や色の変更が可能です。
+
+### 3. リアルタイム共有の有効化
+`src/firebase.js` に自分の Firebase プロジェクトの API キーを設定することで、共有機能が動作します。
+（※現在、自動セットアップによって設定済みです）
+
+## 📦 GitHub 管理
+
+すでに Git が初期化されています。GitHub で新しいリポジトリを作成した後、以下のコマンドでプッシュできます。
+
+```powershell
+git remote add origin https://github.com/あなたのユーザー名/リポジトリ名.git
+git push -u origin main
+```

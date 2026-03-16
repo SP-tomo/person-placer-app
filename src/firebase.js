@@ -3,12 +3,12 @@ import { getFirestore } from "firebase/firestore";
 
 // TODO: Replace with your Firebase project config
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_AUTH_DOMAIN",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_STORAGE_BUCKET",
-  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
-  appId: "YOUR_APP_ID"
+  apiKey: "AIzaSyDZLeyRtiMWyksPUsRtNrYntLtnW6-n0ts",
+  authDomain: "my-placer-app.firebaseapp.com",
+  projectId: "my-placer-app",
+  storageBucket: "my-placer-app.firebasestorage.app",
+  messagingSenderId: "768060668001",
+  appId: "1:768060668001:web:760015cd1e98692ed31220"
 };
 
 const app = initializeApp(firebaseConfig);
