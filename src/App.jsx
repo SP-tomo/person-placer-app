@@ -58,28 +58,40 @@ export default function App() {
   // Layout Generation
   const redistribute = useCallback(async () => {
     let newPeople = [];
-    const safeCols = Math.max(1, gridCols);
-    const safeRows = Math.max(1, gridRows);
     
     if (layoutPreset === 'grid' || layoutPreset === 'staggered') {
-      const totalCells = safeCols * safeRows;
-      const count = isFixedCount ? targetCount : totalCells;
+      let cols, rows;
+      if (isFixedCount) {
+        // Calculate optimal columns and rows for a 'pretty' rectangle
+        const aspectRatio = width / height;
+        cols = Math.round(Math.sqrt(targetCount * aspectRatio));
+        rows = Math.ceil(targetCount / cols);
+      } else {
+        cols = Math.max(1, gridCols);
+        rows = Math.max(1, gridRows);
+      }
+
+      const count = isFixedCount ? targetCount : cols * rows;
+      
+      // Calculate spacing to center the grid
+      const spacingX = width / (cols + 1);
+      const spacingY = height / (rows + 1);
       
       for (let i = 0; i < count; i++) {
-        const r = Math.floor(i / safeCols);
-        const c = i % safeCols;
-        if (r >= safeRows) break;
-
+        const r = Math.floor(i / cols);
+        const c = i % cols;
+        
         let offsetX = 0;
         if (layoutPreset === 'staggered' && r % 2 === 1) {
-          offsetX = (width / (safeCols + 1)) / 2;
+          offsetX = spacingX / 2;
         }
 
         newPeople.push({
           id: `p-${i}`,
-          roleId: (Math.random() > 0.8 ? '2' : '1'),
-          x: (width / (safeCols + 1)) * (c + 1) + offsetX,
-          y: (height / (safeRows + 1)) * (r + 1),
+          roleId: '1',
+          gridPos: { r, c }, // For range selection
+          x: spacingX * (c + 1) + offsetX,
+          y: spacingY * (r + 1),
         });
       }
     } else if (layoutPreset === 'circle') {
@@ -99,8 +111,8 @@ export default function App() {
       }
     } else if (layoutPreset === 'staircase') {
       const count = isFixedCount ? targetCount : 15;
-      const rows = 3;
-      const perRow = Math.ceil(count / rows);
+      const rowCount = 3;
+      const perRow = Math.ceil(count / rowCount);
       
       for (let i = 0; i < count; i++) {
         const r = Math.floor(i / perRow);
@@ -109,8 +121,7 @@ export default function App() {
           id: `p-${i}`,
           roleId: '1',
           x: (width / (perRow + 1)) * (c + 1),
-          y: (height / (rows + 1)) * (r + 1),
-          // Custom scale could be added here for tiered effect
+          y: (height / (rowCount + 1)) * (r + 1),
         });
       }
     }
@@ -120,6 +131,44 @@ export default function App() {
   }, [width, height, gridCols, gridRows, layoutPreset, isFixedCount, targetCount]);
 
   const density = (people.length > 0) ? (width * height) / people.length : 0;
+
+  const [lastSelectedId, setLastSelectedId] = useState(null);
+
+  const handleSelect = (id, shift) => {
+    if (shift && lastSelectedId) {
+      // Range Select logic (Grid-based)
+      const p1 = people.find(p => p.id === lastSelectedId);
+      const p2 = people.find(p => p.id === id);
+      
+      if (p1?.gridPos && p2?.gridPos) {
+        const rMin = Math.min(p1.gridPos.r, p2.gridPos.r);
+        const rMax = Math.max(p1.gridPos.r, p2.gridPos.r);
+        const cMin = Math.min(p1.gridPos.c, p2.gridPos.c);
+        const cMax = Math.max(p1.gridPos.c, p2.gridPos.c);
+        
+        const inRange = people.filter(p => 
+          p.gridPos && 
+          p.gridPos.r >= rMin && p.gridPos.r <= rMax && 
+          p.gridPos.c >= cMin && p.gridPos.c <= cMax
+        ).map(p => p.id);
+        
+        setSelectedIds(prev => Array.from(new Set([...prev, ...inRange])));
+      } else {
+        // Fallback for non-grid layouts: select all between IDs
+        const idx1 = people.findIndex(p => p.id === lastSelectedId);
+        const idx2 = people.findIndex(p => p.id === id);
+        const start = Math.min(idx1, idx2);
+        const end = Math.max(idx1, idx2);
+        const inRange = people.slice(start, end + 1).map(p => p.id);
+        setSelectedIds(prev => Array.from(new Set([...prev, ...inRange])));
+      }
+    } else if (shift) {
+      setSelectedIds(prev => prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id]);
+    } else {
+      setSelectedIds([id]);
+    }
+    setLastSelectedId(id);
+  };
 
   const handleMove = (id, x, y) => {
     const person = people.find(p => p.id === id);
@@ -384,13 +433,7 @@ export default function App() {
                     color={role?.color || '#333'}
                     isSelected={isSelected}
                     onMove={handleMove}
-                    onSelect={(id, shift) => {
-                      if (shift) {
-                        setSelectedIds(prev => prev.includes(id) ? prev.filter(v => v !== id) : [...prev, id]);
-                      } else {
-                        setSelectedIds([id]);
-                      }
-                    }}
+                    onSelect={handleSelect}
                   />
                 );
               })}
