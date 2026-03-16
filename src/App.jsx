@@ -1,7 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { db } from './firebase';
-import { collection, onSnapshot, doc, setDoc, updateDoc, writeBatch } from 'firebase/firestore';
-import { Users, Grid, Settings, Palette, Share2, MousePointer2, AlignCenter, Download, Scissors, Trash2, Maximize } from 'lucide-react';
+import { collection, onSnapshot, doc, setDoc, writeBatch } from 'firebase/firestore';
+import { 
+  Users, Grid, Settings, Palette, MousePointer2, 
+  Maximize, Undo2, Redo2, Paintbrush, BoxSelect,
+  Download, Trash2, Plus, LayoutGrid
+} from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 const defaultRoles = [
@@ -17,15 +21,47 @@ export default function App() {
   const [gridRows, setGridRows] = useState(5);
   const [layoutPreset, setLayoutPreset] = useState('grid');
   const [isFixedCount, setIsFixedCount] = useState(false);
-  const [targetCount, setTargetCount] = useState(40);
+  const [targetCount, setTargetCount] = useState(20);
   const [people, setPeople] = useState([]);
   const [roles, setRoles] = useState(defaultRoles);
   const [selectedIds, setSelectedIds] = useState([]);
   const [snapToGrid, setSnapToGrid] = useState(true);
+  const [tool, setTool] = useState('select'); // 'select', 'range', 'paint'
+  const [paintRoleId, setPaintRoleId] = useState('1');
   const [selectionRect, setSelectionRect] = useState(null);
   
+  // Undo/Redo
+  const [history, setHistory] = useState([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+
   const pixelsPerMeter = 120;
   const canvasRef = useRef(null);
+
+  const pushHistory = useCallback((newState) => {
+    const newHistory = history.slice(0, historyIndex + 1);
+    newHistory.push(JSON.stringify(newState));
+    if (newHistory.length > 50) newHistory.shift();
+    setHistory(newHistory);
+    setHistoryIndex(newHistory.length - 1);
+  }, [history, historyIndex]);
+
+  const undo = () => {
+    if (historyIndex > 0) {
+      const prev = JSON.parse(history[historyIndex - 1]);
+      setPeople(prev);
+      setHistoryIndex(historyIndex - 1);
+      saveToFirestore(prev);
+    }
+  };
+
+  const redo = () => {
+    if (historyIndex < history.length - 1) {
+      const next = JSON.parse(history[historyIndex + 1]);
+      setPeople(next);
+      setHistoryIndex(historyIndex + 1);
+      saveToFirestore(next);
+    }
+  };
 
   // Firestore Sync
   useEffect(() => {
@@ -35,12 +71,14 @@ export default function App() {
       snapshot.forEach((doc) => {
         remotePeople.push({ id: doc.id, ...doc.data() });
       });
-      if (remotePeople.length > 0) {
+      if (remotePeople.length > 0 && historyIndex === -1) {
         setPeople(remotePeople);
+        setHistory([JSON.stringify(remotePeople)]);
+        setHistoryIndex(0);
       }
     });
     return () => unsubscribe();
-  }, []);
+  }, [historyIndex]);
 
   const saveToFirestore = async (newPeople) => {
     try {
@@ -55,14 +93,11 @@ export default function App() {
     }
   };
 
-  // Layout Generation
   const redistribute = useCallback(async () => {
     let newPeople = [];
-    
     if (layoutPreset === 'grid' || layoutPreset === 'staggered') {
       let cols, rows;
       if (isFixedCount) {
-        // Calculate optimal columns and rows for a 'pretty' rectangle
         const aspectRatio = width / height;
         cols = Math.round(Math.sqrt(targetCount * aspectRatio));
         rows = Math.ceil(targetCount / cols);
@@ -70,26 +105,17 @@ export default function App() {
         cols = Math.max(1, gridCols);
         rows = Math.max(1, gridRows);
       }
-
       const count = isFixedCount ? targetCount : cols * rows;
-      
-      // Calculate spacing to center the grid
       const spacingX = width / (cols + 1);
       const spacingY = height / (rows + 1);
-      
       for (let i = 0; i < count; i++) {
         const r = Math.floor(i / cols);
         const c = i % cols;
-        
-        let offsetX = 0;
-        if (layoutPreset === 'staggered' && r % 2 === 1) {
-          offsetX = spacingX / 2;
-        }
-
+        let offsetX = (layoutPreset === 'staggered' && r % 2 === 1) ? spacingX / 2 : 0;
         newPeople.push({
           id: `p-${i}`,
           roleId: '1',
-          gridPos: { r, c }, // For range selection
+          gridPos: { r, c },
           x: spacingX * (c + 1) + offsetX,
           y: spacingY * (r + 1),
         });
@@ -99,7 +125,6 @@ export default function App() {
       const centerX = width / 2;
       const centerY = height / 2;
       const radius = Math.min(width, height) * 0.35;
-      
       for (let i = 0; i < count; i++) {
         const angle = (i / count) * Math.PI * 2;
         newPeople.push({
@@ -109,57 +134,35 @@ export default function App() {
           y: centerY + Math.sin(angle) * radius,
         });
       }
-    } else if (layoutPreset === 'staircase') {
-      const count = isFixedCount ? targetCount : 15;
-      const rowCount = 3;
-      const perRow = Math.ceil(count / rowCount);
-      
-      for (let i = 0; i < count; i++) {
-        const r = Math.floor(i / perRow);
-        const c = i % perRow;
-        newPeople.push({
-          id: `p-${i}`,
-          roleId: '1',
-          x: (width / (perRow + 1)) * (c + 1),
-          y: (height / (rowCount + 1)) * (r + 1),
-        });
-      }
     }
-
     setPeople(newPeople);
+    pushHistory(newPeople);
     await saveToFirestore(newPeople);
-  }, [width, height, gridCols, gridRows, layoutPreset, isFixedCount, targetCount]);
-
-  const density = (people.length > 0) ? (width * height) / people.length : 0;
+  }, [width, height, gridCols, gridRows, layoutPreset, isFixedCount, targetCount, pushHistory]);
 
   const [lastSelectedId, setLastSelectedId] = useState(null);
 
   const handleSelect = (id, shift) => {
-    if (shift && lastSelectedId) {
-      // Range Select logic (Grid-based)
+    if (tool === 'paint') {
+      const newPeople = people.map(p => p.id === id ? { ...p, roleId: paintRoleId } : p);
+      setPeople(newPeople);
+      pushHistory(newPeople);
+      saveToFirestore(newPeople);
+      return;
+    }
+    
+    if (shift && lastSelectedId && tool === 'range') {
       const p1 = people.find(p => p.id === lastSelectedId);
       const p2 = people.find(p => p.id === id);
-      
       if (p1?.gridPos && p2?.gridPos) {
         const rMin = Math.min(p1.gridPos.r, p2.gridPos.r);
         const rMax = Math.max(p1.gridPos.r, p2.gridPos.r);
         const cMin = Math.min(p1.gridPos.c, p2.gridPos.c);
         const cMax = Math.max(p1.gridPos.c, p2.gridPos.c);
-        
         const inRange = people.filter(p => 
-          p.gridPos && 
-          p.gridPos.r >= rMin && p.gridPos.r <= rMax && 
+          p.gridPos && p.gridPos.r >= rMin && p.gridPos.r <= rMax && 
           p.gridPos.c >= cMin && p.gridPos.c <= cMax
         ).map(p => p.id);
-        
-        setSelectedIds(prev => Array.from(new Set([...prev, ...inRange])));
-      } else {
-        // Fallback for non-grid layouts: select all between IDs
-        const idx1 = people.findIndex(p => p.id === lastSelectedId);
-        const idx2 = people.findIndex(p => p.id === id);
-        const start = Math.min(idx1, idx2);
-        const end = Math.max(idx1, idx2);
-        const inRange = people.slice(start, end + 1).map(p => p.id);
         setSelectedIds(prev => Array.from(new Set([...prev, ...inRange])));
       }
     } else if (shift) {
@@ -171,13 +174,12 @@ export default function App() {
   };
 
   const handleMove = (id, x, y) => {
+    if (tool !== 'select') return;
     const person = people.find(p => p.id === id);
     if (!person) return;
-
     let dx = x - person.x;
     let dy = y - person.y;
-
-    const updateMap = (p) => {
+    const newPeople = people.map(p => {
       if (id === p.id || selectedIds.includes(p.id)) {
         const isTarget = id === p.id;
         let nx = isTarget ? x : p.x + dx;
@@ -189,61 +191,42 @@ export default function App() {
         return { ...p, x: nx, y: ny };
       }
       return p;
-    };
-
-    const newPeople = people.map(updateMap);
+    });
     setPeople(newPeople);
-    
-    // Throttle firestore updates or wait for mouseUp? For now, update on end.
+  };
+
+  const handleMoveEnd = () => {
+    pushHistory(people);
+    saveToFirestore(people);
   };
 
   const handleCanvasMouseDown = (e) => {
-    if (e.target.tagName === 'svg' || e.target.tagName === 'rect') {
+    if (tool === 'select' && (e.target.tagName === 'svg' || e.target.tagName === 'rect')) {
       const svg = canvasRef.current;
-      if (!svg) return;
       const pt = svg.createSVGPoint();
-      pt.x = e.clientX;
-      pt.y = e.clientY;
-      const ctm = svg.getScreenCTM();
-      if (!ctm) return;
-      const startPt = pt.matrixTransform(ctm.inverse());
-      setSelectionRect({ x1: startPt.x, y1: startPt.y, x2: startPt.x, y2: startPt.y });
+      pt.x = e.clientX; pt.y = e.clientY;
+      const curPt = pt.matrixTransform(svg.getScreenCTM().inverse());
+      setSelectionRect({ x1: curPt.x, y1: curPt.y, x2: curPt.x, y2: curPt.y });
       if (!e.shiftKey) setSelectedIds([]);
     }
   };
 
   useEffect(() => {
-    const handleSave = () => {
-      saveToFirestore(people);
-    };
-    window.addEventListener('save-placements', handleSave);
-    return () => window.removeEventListener('save-placements', handleSave);
-  }, [people]);
-
-  useEffect(() => {
     if (!selectionRect) return;
-
     const onMouseMove = (e) => {
       const svg = canvasRef.current;
       const pt = svg.createSVGPoint();
-      pt.x = e.clientX;
-      pt.y = e.clientY;
-      const ctm = svg.getScreenCTM();
-      if (!ctm) return;
-      const curPt = pt.matrixTransform(ctm.inverse());
+      pt.x = e.clientX; pt.y = e.clientY;
+      const curPt = pt.matrixTransform(svg.getScreenCTM().inverse());
       setSelectionRect(prev => ({ ...prev, x2: curPt.x, y2: curPt.y }));
-
       const xMin = Math.min(selectionRect.x1, curPt.x);
       const xMax = Math.max(selectionRect.x1, curPt.x);
       const yMin = Math.min(selectionRect.y1, curPt.y);
       const yMax = Math.max(selectionRect.y1, curPt.y);
-
       const newlySelected = people.filter(p => p.x >= xMin && p.x <= xMax && p.y >= yMin && p.y <= yMax).map(p => p.id);
       setSelectedIds(newlySelected);
     };
-
     const onMouseUp = () => setSelectionRect(null);
-
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     return () => {
@@ -254,164 +237,148 @@ export default function App() {
 
   return (
     <div className="app-container">
-      <div className="sidebar">
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ background: 'var(--primary)', padding: '8px', borderRadius: '10px' }}>
-            <Users size={20} color="white" />
+      <aside className="sidebar">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' }}>
+          <div style={{ background: 'var(--primary)', padding: '10px', borderRadius: '14px', boxShadow: '0 4px 12px var(--primary-glow)' }}>
+            <Users size={24} color="white" />
           </div>
-          <h1 style={{ fontSize: '1.25rem', fontWeight: '800', letterSpacing: '-0.02em' }}>Placer Pro</h1>
+          <h1 className="title">Placer Pro</h1>
         </div>
 
-        <div className="input-group">
-          <label>空間サイズ (m)</label>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <input type="number" value={width} onChange={(e) => setWidth(Number(e.target.value))} placeholder="幅" />
-            <input type="number" value={height} onChange={(e) => setHeight(Number(e.target.value))} placeholder="奥行" />
+        <div className="sidebar-section">
+          <div className="section-header">
+            <Maximize size={14} color="var(--text-muted)" />
+            <span>キャンバス設定</span>
+          </div>
+          <div className="input-group">
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ flex: 1 }}>
+                <label>幅 (m)</label>
+                <input type="number" value={width} onChange={(e) => setWidth(Number(e.target.value))} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label>奥行 (m)</label>
+                <input type="number" value={height} onChange={(e) => setHeight(Number(e.target.value))} />
+              </div>
+            </div>
           </div>
         </div>
 
-        <div className="input-group">
-          <label>配置設定</label>
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-            <select value={layoutPreset} onChange={(e) => setLayoutPreset(e.target.value)} style={{ flex: 1 }}>
-              <option value="grid">通常グリッド</option>
-              <option value="staggered">千鳥配置</option>
-              <option value="circle">円形配置</option>
-              <option value="staircase">階段型 (ひな壇)</option>
-            </select>
-            <button onClick={redistribute} className="btn-secondary" style={{ padding: '8px' }}>
-              <Grid size={14} /> 再配置
-            </button>
+        <div className="sidebar-section">
+          <div className="section-header">
+            <LayoutGrid size={14} color="var(--text-muted)" />
+            <span>自動配置オプション</span>
           </div>
-          
-          <div style={{ padding: '12px', background: '#f8fafc', borderRadius: '8px', border: '1px solid var(--border)' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', cursor: 'pointer', fontSize: '0.8rem', textTransform: 'none' }}>
+          <select value={layoutPreset} onChange={(e) => setLayoutPreset(e.target.value)} style={{ width: '100%' }}>
+            <option value="grid">グリッド配置</option>
+            <option value="staggered">千鳥配置</option>
+            <option value="circle">円形配置</option>
+          </select>
+          <div className="stats-card">
+            <label style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer', textTransform: 'none' }}>
               <input type="checkbox" checked={isFixedCount} onChange={() => setIsFixedCount(!isFixedCount)} />
-              人数を固定 ({people.length}人)
+              人数を固定する
             </label>
-            
             {isFixedCount ? (
               <div className="input-group">
-                <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>ターゲット人数</span>
+                <label>人数合計</label>
                 <input type="number" value={targetCount} onChange={(e) => setTargetCount(Number(e.target.value))} />
               </div>
             ) : (
               <div style={{ display: 'flex', gap: '8px' }}>
                 <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>列 (横)</span>
-                  <input type="number" style={{ width: '100%' }} value={gridCols} onChange={(e) => setGridCols(Number(e.target.value))} />
+                  <label>列</label>
+                  <input type="number" value={gridCols} onChange={(e) => setGridCols(Number(e.target.value))} />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>行 (縦)</span>
-                  <input type="number" style={{ width: '100%' }} value={gridRows} onChange={(e) => setGridRows(Number(e.target.value))} />
+                  <label>行</label>
+                  <input type="number" value={gridRows} onChange={(e) => setGridRows(Number(e.target.value))} />
                 </div>
               </div>
             )}
+            <button onClick={redistribute} className="primary" style={{ marginTop: '8px' }}>
+              <Plus size={16} /> 新規配置を適用
+            </button>
           </div>
         </div>
 
-        <div className="input-group">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-            <label>役割とカラー</label>
-            {selectedIds.length > 0 && (
-              <span style={{ fontSize: '0.7rem', color: 'var(--primary)', fontWeight: '600' }}>
-                {selectedIds.length}人選択中
-              </span>
-            )}
+        <div className="sidebar-section">
+          <div className="section-header">
+            <Palette size={14} color="var(--text-muted)" />
+            <span>役割と適用</span>
           </div>
           {roles.map(role => (
             <div 
               key={role.id} 
-              className={`role-badge ${selectedIds.length > 0 ? 'interactive' : ''}`}
-              title={selectedIds.length > 0 ? `選択中の人に「${role.name}」を適用` : ''}
+              className={`role-badge ${paintRoleId === role.id && tool === 'paint' ? 'active' : ''}`}
               onClick={() => {
+                setPaintRoleId(role.id);
+                setTool('paint');
                 if (selectedIds.length > 0) {
-                  const newPeople = people.map(p => 
-                    selectedIds.includes(p.id) ? { ...p, roleId: role.id } : p
-                  );
-                  setPeople(newPeople);
-                  saveToFirestore(newPeople);
+                   const newPeople = people.map(p => selectedIds.includes(p.id) ? { ...p, roleId: role.id } : p);
+                   setPeople(newPeople);
+                   pushHistory(newPeople);
+                   saveToFirestore(newPeople);
                 }
               }}
-              style={{ 
-                cursor: selectedIds.length > 0 ? 'pointer' : 'default',
-                transform: selectedIds.length > 0 ? 'scale(1)' : 'none',
-                transition: 'all 0.2s',
-                border: selectedIds.length > 0 ? '1px solid var(--primary)' : '1px solid var(--border)',
-                background: selectedIds.length > 0 ? 'rgba(79, 70, 229, 0.05)' : 'white'
-              }}
             >
-              <input 
-                type="color" 
-                value={role.color} 
-                onChange={(e) => {
-                  setRoles(roles.map(r => r.id === role.id ? { ...r, color: e.target.value } : r));
-                  e.stopPropagation();
-                }}
-                style={{ width: '20px', height: '20px', padding: '0', border: 'none', cursor: 'pointer', background: 'none' }}
-              />
-              <input
-                type="text"
-                value={role.name}
-                onChange={(e) => {
-                  setRoles(roles.map(r => r.id === role.id ? { ...r, name: e.target.value } : r));
-                  e.stopPropagation();
-                }}
-                onClick={(e) => e.stopPropagation()}
-                style={{ background: 'transparent', border: 'none', fontWeight: '500', width: '100%', fontSize: '0.85rem' }}
-              />
+              <div style={{ width: '20px', height: '20px', borderRadius: '6px', background: role.color, border: '2px solid white', boxShadow: '0 0 0 1px #ddd' }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '0.85rem', fontWeight: '700' }}>{role.name}</div>
+                <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>{people.filter(p => p.roleId === role.id).length}人</div>
+              </div>
             </div>
           ))}
         </div>
 
-        <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: '8px' }}>
-          <div className="stats-card" style={{ background: '#f8fafc' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-              <span style={{ color: 'var(--text-muted)' }}>人数合計:</span>
-              <span style={{ fontWeight: '700' }}>{people.length} 人</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span style={{ color: 'var(--text-muted)' }}>1人あたり:</span>
-              <span style={{ fontWeight: '700' }}>{density.toFixed(2)} m²</span>
-            </div>
-          </div>
-          <button style={{ width: '100%' }}>
-            <Download size={16} /> 保存・書き出し
+        <div style={{ marginTop: 'auto' }}>
+          <button style={{ width: '100%', background: '#f8fafc', color: 'var(--text-main)', border: '1px solid var(--border)' }}>
+            <Download size={16} /> データをエクスポート
           </button>
         </div>
-      </div>
+      </aside>
 
-      <div className="main-content">
-        <div className="header">
-          <div className="title">配置シミュレーター</div>
-          <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', textTransform: 'none' }}>
+      <main className="main-content">
+        <header className="header">
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+            <div className="stats-card" style={{ padding: '6px 12px', background: 'transparent' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: '700' }}>{people.length} 人</span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', textTransform: 'none', fontWeight: '600' }}>
               <input type="checkbox" checked={snapToGrid} onChange={() => setSnapToGrid(!snapToGrid)} />
-              グリッドに吸着
+              整列補助を有効
             </label>
-            <div className="stats-card">
-              <Maximize size={14} style={{ marginRight: '6px', verticalAlign: 'middle' }} />
+            <div className="stats-card" style={{ background: 'white' }}>
               面積: {(width * height).toFixed(1)} m²
             </div>
           </div>
-        </div>
+        </header>
 
         <div className="canvas-wrapper">
+          <div className="toolbar">
+            <button className={`tool-btn ${tool === 'select' ? 'active' : ''}`} onClick={() => setTool('select')} title="選択・移動工具">
+              <MousePointer2 size={20} />
+            </button>
+            <button className={`tool-btn ${tool === 'range' ? 'active' : ''}`} onClick={() => setTool('range')} title="範囲選択工具 (Shift+クリック対応)">
+              <BoxSelect size={20} />
+            </button>
+            <button className={`tool-btn ${tool === 'paint' ? 'active' : ''}`} onClick={() => setTool('paint')} title="ペイント工具 (役割を塗る)">
+              <Paintbrush size={20} />
+            </button>
+            <div style={{ width: '1px', background: 'var(--border)', margin: '4px 8px' }} />
+            <button className="tool-btn" onClick={() => { setPeople(people.filter(p => !selectedIds.includes(p.id))); setSelectedIds([]); }} title="選択削除" style={{ color: '#ef4444' }}>
+              <Trash2 size={20} />
+            </button>
+          </div>
+
           <div 
             className="canvas-container" 
-            style={{ 
-              width: `${width * pixelsPerMeter}px`, 
-              height: `${height * pixelsPerMeter}px` 
-            }}
+            style={{ width: `${width * pixelsPerMeter}px`, height: `${height * pixelsPerMeter}px` }}
             onMouseDown={handleCanvasMouseDown}
           >
-            <svg 
-              ref={canvasRef}
-              width="100%" 
-              height="100%" 
-              viewBox={`0 0 ${width} ${height}`}
-              style={{ overflow: 'visible' }}
-            >
+            <svg ref={canvasRef} width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} style={{ overflow: 'visible' }}>
               <defs>
                 <pattern id="smallGrid" width="0.1" height="0.1" patternUnits="userSpaceOnUse">
                   <path d="M 0.1 0 L 0 0 0 0.1" fill="none" stroke="#f1f5f9" strokeWidth="0.01"/>
@@ -422,22 +389,21 @@ export default function App() {
                 </pattern>
               </defs>
               <rect width="100%" height="100%" fill="url(#grid)" />
-
               {people.map(person => {
                 const role = roles.find(r => r.id === person.roleId);
-                const isSelected = selectedIds.includes(person.id);
                 return (
                   <PersonNode 
                     key={person.id} 
                     person={person} 
                     color={role?.color || '#333'}
-                    isSelected={isSelected}
+                    isSelected={selectedIds.includes(person.id)}
                     onMove={handleMove}
+                    onMoveEnd={handleMoveEnd}
                     onSelect={handleSelect}
+                    tool={tool}
                   />
                 );
               })}
-
               {selectionRect && (
                 <rect 
                   className="selection-rect"
@@ -449,55 +415,51 @@ export default function App() {
               )}
             </svg>
           </div>
+
+          <div className="history-controls">
+            <button className="tool-btn" onClick={undo} disabled={historyIndex <= 0} style={{ opacity: historyIndex <= 0 ? 0.3 : 1 }}>
+              <Undo2 size={18} />
+            </button>
+            <button className="tool-btn" onClick={redo} disabled={historyIndex >= history.length - 1} style={{ opacity: historyIndex >= history.length - 1 ? 0.3 : 1 }}>
+              <Redo2 size={18} />
+            </button>
+          </div>
         </div>
-        
-        <div className="controls-overlay">
-          <button className="btn-secondary" onClick={() => setSelectedIds(people.map(p => p.id))}><MousePointer2 size={16}/> 全選択</button>
-          <button className="btn-secondary" onClick={() => setPeople(people.filter(p => !selectedIds.includes(p.id)))} style={{ color: '#ef4444' }}><Trash2 size={16}/> 選択削除</button>
-        </div>
-      </div>
+      </main>
     </div>
   );
 }
 
-function PersonNode({ person, color, isSelected, onMove, onSelect }) {
+function PersonNode({ person, color, isSelected, onMove, onMoveEnd, onSelect, tool }) {
   const [isDragging, setIsDragging] = useState(false);
   const nodeRef = useRef(null);
 
   const handleMouseDown = (e) => {
-    setIsDragging(true);
     onSelect(person.id, e.shiftKey);
-    e.stopPropagation();
-    e.preventDefault();
+    if (tool === 'select') setIsDragging(true);
+    e.stopPropagation(); e.preventDefault();
   };
 
   useEffect(() => {
     if (!isDragging) return;
-
     const onMouseMove = (e) => {
       const svg = nodeRef.current.ownerSVGElement;
       const pt = svg.createSVGPoint();
-      pt.x = e.clientX;
-      pt.y = e.clientY;
+      pt.x = e.clientX; pt.y = e.clientY;
       const cursorPoint = pt.matrixTransform(svg.getScreenCTM().inverse());
       onMove(person.id, cursorPoint.x, cursorPoint.y);
     };
-
-    const onMouseUp = async () => {
+    const onMouseUp = () => {
       setIsDragging(false);
-      // We need to save the current positions to Firestore here.
-      // Since handleMove already updated the local 'people' state, 
-      // we can trigger a save of the affected people.
-      window.dispatchEvent(new CustomEvent('save-placements'));
+      onMoveEnd();
     };
-
     window.addEventListener('mousemove', onMouseMove);
     window.addEventListener('mouseup', onMouseUp);
     return () => {
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
     };
-  }, [isDragging, person.id, onMove]);
+  }, [isDragging, person.id, onMove, onMoveEnd]);
 
   return (
     <motion.g
@@ -506,19 +468,13 @@ function PersonNode({ person, color, isSelected, onMove, onSelect }) {
       animate={{ x: person.x, y: person.y }}
       onMouseDown={handleMouseDown}
       className="person-node"
-      style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+      style={{ cursor: tool === 'select' ? (isDragging ? 'grabbing' : 'grab') : (tool === 'paint' ? 'crosshair' : 'pointer') }}
     >
       {isSelected && (
-        <circle r="0.2" fill="rgba(79, 70, 229, 0.2)" stroke="var(--primary)" strokeWidth="0.02" strokeDasharray="0.05, 0.05" />
+        <circle r="0.2" fill="rgba(79, 70, 229, 0.15)" stroke="var(--primary)" strokeWidth="0.02" strokeDasharray="0.05, 0.05" />
       )}
-      <circle r="0.12" fill={color} style={{ filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />
-      <text 
-        y="0.25" 
-        fontSize="0.08" 
-        fill="#1e293b" 
-        textAnchor="middle" 
-        style={{ pointerEvents: 'none', fontWeight: '600' }}
-      >
+      <circle r="0.12" fill={color} style={{ filter: isSelected ? 'drop-shadow(0 0 10px var(--primary-glow))' : 'drop-shadow(0 2px 4px rgba(0,0,0,0.1))' }} />
+      <text y="0.25" fontSize="0.08" fill="#1e293b" textAnchor="middle" style={{ pointerEvents: 'none', fontWeight: '800' }}>
         {person.id.split('-').slice(1).join('-')}
       </text>
     </motion.g>
